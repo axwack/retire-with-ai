@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import Layout from "@/components/layout/Layout";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
-import { Send, Sparkles, User, CreditCard, Loader2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Send, Sparkles, User, CreditCard, Loader2, LogIn } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 interface Message {
   id: string;
@@ -14,6 +17,10 @@ interface Message {
 }
 
 const AiRA = () => {
+  const { user, profile, refreshProfile } = useAuth();
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
@@ -24,7 +31,6 @@ const AiRA = () => {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [credits, setCredits] = useState(10); // Demo credits
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -37,7 +43,27 @@ const AiRA = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || credits <= 0) return;
+    if (!input.trim() || isLoading) return;
+
+    if (!user) {
+      toast({
+        title: "Sign in required",
+        description: "Please sign in to chat with AiRA.",
+        variant: "destructive",
+      });
+      navigate("/auth");
+      return;
+    }
+
+    if (!profile || profile.credits <= 0) {
+      toast({
+        title: "No credits available",
+        description: "Please purchase credits to continue chatting.",
+        variant: "destructive",
+      });
+      navigate("/credits");
+      return;
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -49,27 +75,35 @@ const AiRA = () => {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
-    setCredits((prev) => prev - 1);
 
-    // Simulate AI response (this would connect to AWS API Gateway/Lambda in production)
-    setTimeout(() => {
-      const responses = [
-        "That's a great question about retirement planning! Based on your query, I'd recommend considering a diversified approach that balances growth potential with income stability. Would you like me to elaborate on specific strategies?",
-        "When it comes to Social Security, timing is crucial. Delaying benefits until age 70 can increase your monthly payment by up to 32% compared to claiming at 62. However, the best decision depends on your individual circumstances, health, and financial needs.",
-        "For tax-efficient withdrawals in retirement, consider the order: first, use taxable accounts to allow tax-deferred accounts more time to grow. Then, tap traditional IRAs/401(k)s, and finally Roth accounts for tax-free growth.",
-        "Healthcare costs in retirement are often underestimated. The average 65-year-old couple may need approximately $300,000 saved for healthcare expenses in retirement. Have you considered a Health Savings Account (HSA) as part of your strategy?",
-      ];
+    try {
+      const { data, error } = await supabase.functions.invoke("aira-chat", {
+        body: { message: userMessage.content },
+      });
+
+      if (error) throw error;
 
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: responses[Math.floor(Math.random() * responses.length)],
+        content: data.response,
         timestamp: new Date(),
       };
 
       setMessages((prev) => [...prev, aiMessage]);
+      
+      // Refresh profile to update credits display
+      await refreshProfile();
+    } catch (error) {
+      console.error("Chat error:", error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to get response. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
       setIsLoading(false);
-    }, 1500);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -78,6 +112,8 @@ const AiRA = () => {
       handleSubmit(e);
     }
   };
+
+  const credits = profile?.credits ?? 0;
 
   return (
     <Layout hideFooter>
@@ -95,15 +131,26 @@ const AiRA = () => {
               </div>
             </div>
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sage-light">
-                <CreditCard className="h-4 w-4 text-sage" />
-                <span className="text-sm font-medium text-sage-dark">{credits} Credits</span>
-              </div>
-              <Link to="/credits">
-                <Button variant="outline-gold" size="sm">
-                  Buy More
-                </Button>
-              </Link>
+              {user ? (
+                <>
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sage-light">
+                    <CreditCard className="h-4 w-4 text-sage" />
+                    <span className="text-sm font-medium text-sage-dark">{credits} Credits</span>
+                  </div>
+                  <Link to="/credits">
+                    <Button variant="outline-gold" size="sm">
+                      Buy More
+                    </Button>
+                  </Link>
+                </>
+              ) : (
+                <Link to="/auth">
+                  <Button variant="outline-gold" size="sm" className="gap-2">
+                    <LogIn className="h-4 w-4" />
+                    Sign In
+                  </Button>
+                </Link>
+              )}
             </div>
           </div>
         </div>
@@ -164,7 +211,14 @@ const AiRA = () => {
         {/* Input Area */}
         <div className="border-t border-border bg-card p-4">
           <div className="container max-w-4xl">
-            {credits <= 0 ? (
+            {!user ? (
+              <div className="text-center py-4">
+                <p className="text-muted-foreground mb-3">Sign in to start chatting with AiRA</p>
+                <Link to="/auth">
+                  <Button variant="hero">Sign In</Button>
+                </Link>
+              </div>
+            ) : credits <= 0 ? (
               <div className="text-center py-4">
                 <p className="text-muted-foreground mb-3">You're out of credits!</p>
                 <Link to="/credits">
