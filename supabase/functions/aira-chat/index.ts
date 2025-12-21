@@ -9,31 +9,41 @@ const corsHeaders = {
 /**
  * AiRA Chat Edge Function
  * 
- * This is a STUB function for the AI chat interface.
+ * Calls AWS API Gateway + Lambda which invokes Claude for AI responses.
  * 
- * TODO: Implement your AWS API Gateway + Lambda integration here
- * 
- * Expected flow:
+ * Flow:
  * 1. Receive message from authenticated user
  * 2. Check user has credits available
  * 3. Deduct 1 credit from user's balance
  * 4. Call AWS API Gateway endpoint that triggers Lambda -> Claude
  * 5. Return Claude's response
- * 
- * Required secrets to add:
- * - AWS_API_GATEWAY_URL: Your AWS API Gateway endpoint URL
- * - AWS_API_KEY: Your AWS API Gateway API key (if using API key auth)
- * 
- * Example AWS call:
- * const response = await fetch(Deno.env.get("AWS_API_GATEWAY_URL"), {
- *   method: "POST",
- *   headers: {
- *     "Content-Type": "application/json",
- *     "x-api-key": Deno.env.get("AWS_API_KEY") || "",
- *   },
- *   body: JSON.stringify({ message, conversationHistory }),
- * });
  */
+
+const AIRA_SYSTEM_PROMPT = `You are AiRA (AI Retirement Advisor), a knowledgeable and empathetic AI assistant specializing in retirement planning. Your role is to help users navigate their retirement journey with confidence and clarity.
+
+Key areas of expertise:
+- Social Security optimization and claiming strategies
+- Investment and portfolio management for retirees
+- Tax-efficient withdrawal strategies
+- Healthcare and Medicare planning
+- Estate planning fundamentals
+- Inflation protection strategies
+- Legacy and wealth transfer planning
+
+Guidelines:
+- Always be warm, patient, and encouraging
+- Explain complex financial concepts in simple terms
+- Acknowledge when questions require professional advice
+- Never provide specific investment recommendations or tax advice
+- Encourage users to consult with licensed professionals for personalized advice
+- Focus on education and general guidance
+
+Remember: You are a trusted companion on their retirement journey, not a replacement for professional financial advisors.`;
+
+const logStep = (step: string, details?: any) => {
+  const detailsStr = details ? ` - ${JSON.stringify(details)}` : '';
+  console.log(`[AIRA-CHAT] ${step}${detailsStr}`);
+};
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -46,11 +56,21 @@ serve(async (req) => {
   );
 
   try {
-    const { message } = await req.json();
+    const { message, conversationHistory = [] } = await req.json();
+    logStep("Request received", { messageLength: message?.length });
     
     if (!message) {
       throw new Error("Message is required");
     }
+
+    // Validate AWS secrets are configured
+    const awsApiUrl = Deno.env.get("AWS_API_GATEWAY_URL");
+    const awsApiKey = Deno.env.get("AWS_API_KEY");
+    
+    if (!awsApiUrl) {
+      throw new Error("AWS_API_GATEWAY_URL is not configured");
+    }
+    logStep("AWS configuration verified");
 
     // Authenticate user
     const authHeader = req.headers.get("Authorization");
@@ -62,6 +82,7 @@ serve(async (req) => {
     
     const user = userData.user;
     if (!user) throw new Error("User not authenticated");
+    logStep("User authenticated", { userId: user.id });
 
     // Check user's credits
     const { data: profile, error: profileError } = await supabaseClient
@@ -74,6 +95,7 @@ serve(async (req) => {
     if (!profile || profile.credits <= 0) {
       throw new Error("Insufficient credits");
     }
+    logStep("Credits verified", { credits: profile.credits });
 
     // Deduct 1 credit
     const { error: updateError } = await supabaseClient
@@ -82,6 +104,7 @@ serve(async (req) => {
       .eq("id", user.id);
 
     if (updateError) throw new Error(`Credit update error: ${updateError.message}`);
+    logStep("Credit deducted");
 
     // Save user message
     await supabaseClient.from("chat_messages").insert({
@@ -89,20 +112,44 @@ serve(async (req) => {
       role: "user",
       content: message,
     });
+    logStep("User message saved");
 
-    // ============================================================
-    // TODO: Replace this mock response with your AWS API Gateway call
-    // ============================================================
+    // Call AWS API Gateway -> Lambda -> Claude
+    logStep("Calling AWS API Gateway", { url: awsApiUrl });
     
-    // Mock response for now
-    const mockResponses = [
-      "That's a great question about retirement planning! Based on your query, I'd recommend considering a diversified approach that balances growth potential with income stability. Would you like me to elaborate on specific strategies?",
-      "When it comes to Social Security, timing is crucial. Delaying benefits until age 70 can increase your monthly payment by up to 32% compared to claiming at 62. However, the best decision depends on your individual circumstances, health, and financial needs.",
-      "For tax-efficient withdrawals in retirement, consider the order: first, use taxable accounts to allow tax-deferred accounts more time to grow. Then, tap traditional IRAs/401(k)s, and finally Roth accounts for tax-free growth.",
-      "Healthcare costs in retirement are often underestimated. The average 65-year-old couple may need approximately $300,000 saved for healthcare expenses in retirement. Have you considered a Health Savings Account (HSA) as part of your strategy?",
-    ];
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
     
-    const aiResponse = mockResponses[Math.floor(Math.random() * mockResponses.length)];
+    // Add API key if configured
+    if (awsApiKey) {
+      headers["x-api-key"] = awsApiKey;
+    }
+
+    const awsResponse = await fetch(awsApiUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        message,
+        conversationHistory,
+        systemPrompt: AIRA_SYSTEM_PROMPT,
+      }),
+    });
+
+    if (!awsResponse.ok) {
+      const errorText = await awsResponse.text();
+      logStep("AWS API error", { status: awsResponse.status, error: errorText });
+      throw new Error(`AWS API error: ${awsResponse.status} - ${errorText}`);
+    }
+
+    const awsData = await awsResponse.json();
+    const aiResponse = awsData.response || awsData.message || awsData.content;
+    
+    if (!aiResponse) {
+      logStep("Invalid AWS response format", { awsData });
+      throw new Error("Invalid response format from AWS API");
+    }
+    logStep("AWS response received", { responseLength: aiResponse.length });
 
     // Save AI response
     await supabaseClient.from("chat_messages").insert({
