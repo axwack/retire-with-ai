@@ -143,7 +143,7 @@ serve(async (req) => {
     }
 
     const awsData = await awsResponse.json();
-    const aiResponse = awsData.response || awsData.message || awsData.content;
+    const aiResponse = awsData.output || awsData.response || awsData.message || awsData.content;
     
     if (!aiResponse) {
       logStep("Invalid AWS response format", { awsData });
