@@ -41,6 +41,18 @@ const Credits = () => {
     }
   }, [searchParams, toast, refreshProfile, navigate]);
 
+  // Poll for credit updates when user comes back to the page
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && user) {
+        refreshProfile();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [user, refreshProfile]);
+
   const iconMap = {
     starter: Sparkles,
     plus: Zap,
