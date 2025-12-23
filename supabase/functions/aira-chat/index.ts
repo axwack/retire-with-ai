@@ -115,7 +115,11 @@ serve(async (req) => {
     logStep("User message saved");
 
     // Call AWS API Gateway -> Lambda -> Claude
-    logStep("Calling AWS API Gateway", { url: awsApiUrl });
+    const requestPayload = {
+      message,
+      conversationHistory,
+      systemPrompt: AIRA_SYSTEM_PROMPT,
+    };
     
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -126,30 +130,60 @@ serve(async (req) => {
       headers["x-api-key"] = awsApiKey;
     }
 
+    // Log full request details for debugging
+    logStep("=== AWS REQUEST START ===");
+    logStep("AWS Request URL", { url: awsApiUrl });
+    logStep("AWS Request Headers", { 
+      contentType: headers["Content-Type"],
+      hasApiKey: !!awsApiKey 
+    });
+    logStep("AWS Request Payload", { 
+      messageLength: message?.length,
+      messagePreview: message?.substring(0, 100),
+      historyLength: conversationHistory?.length,
+      systemPromptLength: AIRA_SYSTEM_PROMPT?.length
+    });
+    logStep("AWS Full Payload", requestPayload);
+
     const awsResponse = await fetch(awsApiUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        message,
-        conversationHistory,
-        systemPrompt: AIRA_SYSTEM_PROMPT,
-      }),
+      body: JSON.stringify(requestPayload),
     });
+
+    // Log response details
+    logStep("=== AWS RESPONSE START ===");
+    logStep("AWS Response Status", { 
+      status: awsResponse.status, 
+      statusText: awsResponse.statusText,
+      ok: awsResponse.ok 
+    });
+    logStep("AWS Response Headers", Object.fromEntries(awsResponse.headers.entries()));
 
     if (!awsResponse.ok) {
       const errorText = await awsResponse.text();
-      logStep("AWS API error", { status: awsResponse.status, error: errorText });
+      logStep("AWS API Error Response Body", { error: errorText });
       throw new Error(`AWS API error: ${awsResponse.status} - ${errorText}`);
     }
 
     const awsData = await awsResponse.json();
+    logStep("AWS Response Body (Full)", awsData);
+    logStep("AWS Response Keys", { keys: Object.keys(awsData) });
+    
     const aiResponse = awsData.output || awsData.response || awsData.message || awsData.content;
     
     if (!aiResponse) {
-      logStep("Invalid AWS response format", { awsData });
+      logStep("Invalid AWS response - no recognized content field", { 
+        availableFields: Object.keys(awsData),
+        awsData 
+      });
       throw new Error("Invalid response format from AWS API");
     }
-    logStep("AWS response received", { responseLength: aiResponse.length });
+    logStep("AWS Response Extracted", { 
+      responseLength: aiResponse.length,
+      responsePreview: aiResponse?.substring(0, 200)
+    });
+    logStep("=== AWS REQUEST/RESPONSE END ===");
 
     // Save AI response
     await supabaseClient.from("chat_messages").insert({
