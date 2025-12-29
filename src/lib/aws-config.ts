@@ -30,8 +30,8 @@
  */
 
 export const AWS_CONFIG = {
-  // TODO: Replace with your actual API Gateway URL
-  apiGatewayUrl: "https://your-api-id.execute-api.us-east-1.amazonaws.com/prod/chat",
+  // API Gateway URL
+  apiGatewayUrl: "https://r6ln1gcwga.execute-api.us-east-1.amazonaws.com/test/lovable-aira",
   
   // Set to true if you're using API key authentication
   useApiKey: true,
